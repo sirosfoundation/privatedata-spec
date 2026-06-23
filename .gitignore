@@ -1,0 +1,33 @@
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Test output
+conformance-results/
+test-output/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Build artifacts
+build/
+dist/
+.gradle/
+.swift
+
+# Node
+node_modules/
+npm-debug.log
+
+# Test vectors generated locally
+test-vectors/generated/
