@@ -1,82 +1,45 @@
-# SIROS Private Data Encryption Specification & Conformance
+# SIROS Private Data Specification and Conformance
 
-Normative specification and test suite for the SIROS wallet private data blob format, ensuring cross-client compatibility between TypeScript/JavaScript, Kotlin, and Swift SDK implementations.
+Normative specification and conformance artifacts for SIROS wallet private data compatibility across TypeScript/JavaScript, Kotlin, and Swift clients.
 
-## Directory Structure
+## Contents
 
-```
-privatedata-spec/
-├── SPEC.md                           # Normative specification
-├── README.md                         # This file
-├── docs/
-│   ├── SERIALIZATION.md             # Normative serialization rules
-│   ├── INTEGRATION.md               # SDK integration guide
-│   └── TROUBLESHOOTING.md           # Common implementation issues
-├── test-vectors/
-│   ├── README.md                    # Test vector documentation
-│   ├── fixtures/
-│   │   ├── single-credential-v3.json
-│   │   ├── multi-passkey-v3.json
-│   │   ├── legacy-v1-symmetric.json
-│   │   └── metadata-preservation.json
-│   ├── edge-cases/
-│   │   ├── max-size-container.json
-│   │   ├── unicode-credentials.json
-│   │   └── empty-presentations.json
-│   └── vectors.jsonl                # Complete test vector suite (line-delimited JSON)
-└── conformance/
-    ├── README.md                    # Conformance runner guide
-    ├── conformance-runner.sh        # Main test orchestrator
-    ├── validators/
-    │   ├── validate-encryption.sh   # Verify encrypt output
-    │   ├── validate-decryption.sh   # Verify decrypt output
-    │   └── validate-metadata.sh     # Verify metadata preservation
-    └── client-interfaces/
-        ├── ts-interface.sh          # wallet-frontend integration
-        ├── kotlin-interface.sh      # siros-sdk-kotlin integration
-        └── swift-interface.sh       # siros-sdk-swift integration
-```
+- `SPEC.md`: Normative private data format and processing rules
+- `docs/SERIALIZATION.md`: Canonical encoding and serialization requirements
+- `docs/INTEGRATION.md`: SDK integration guidance for conformance
+- `docs/TROUBLESHOOTING.md`: Common interop and implementation pitfalls
+- `test-vectors/vectors.jsonl`: Canonical vector index
+- `test-vectors/fixtures/`: Core vectors (single credential, multi-passkey, metadata, legacy)
+- `test-vectors/edge-cases/`: Edge-case vectors (unicode, empty arrays, large state)
+- `conformance/conformance-runner.sh`: Cross-client conformance runner
+- `conformance/README.md`: Runner usage and CI integration
 
 ## Quick Start
 
-### 1. Review the Specification
+1. Read `SPEC.md` for normative behavior.
+2. Review `test-vectors/vectors.jsonl` and fixture files.
+3. Run conformance checks:
 
-Start with [SPEC.md](SPEC.md) for normative requirements on:
-- Blob transport and encoding (tagged binary JSON)
-- Container model (mainKey, prfKeys, jwe)
-- Cryptographic processing (ECDH, AES-KW, A256GCM)
-- WalletStateContainer schema
-- Concurrency control (ETag-based)
-
-### 2. Understand Test Vectors
-
-Test vectors in `test-vectors/vectors.jsonl` follow this structure:
-
-```json
-{
-  "id": "single-credential-v3-001",
-  "description": "Single passkey credential with full metadata",
-  "inputs": {
-    "credentialId": "<base64url>",
-    "prfOutput": "<base64url>",
-    "hkdfSalt": "<base64url>",
-    "hkdfInfo": "eDiplomas PRF"
-  },
-  "expected": {
-    "container": "<serialized-json-bytes>",
-    "state": { "S": { "schemaVersion": 3, ... } },
-    "mainKeyPublic": "<uncompressed-p256-point>",
-    "prfKeyEntry": { "credentialId": "...", ... }
-  },
-  "sections": ["4", "5", "6"],
-  "tags": ["basic", "single-passkey"]
-}
+```bash
+cd conformance
+./conformance-runner.sh --help
+./conformance-runner.sh
 ```
 
-Each client must:
-1. **Encrypt**: Given inputs, produce container matching `expected.container`
-2. **Decrypt**: Given container, parse to state matching `expected.state`
-3. **Round-trip**: Decrypt → re-encrypt → verify bytes match
+## Goals
+
+- Keep all clients interoperable at the private data level
+- Prevent metadata and event history loss during round-trips
+- Validate credential-bound PRF entry selection in multi-passkey containers
+- Catch regressions before release via repeatable conformance runs
+
+## Source of Truth
+
+Behavior is aligned with `wallet-frontend` as reference implementation.
+
+## License
+
+See `LICENSE`.
 
 ### 3. Run Conformance Tests
 
