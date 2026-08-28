@@ -1,12 +1,18 @@
 # Private Data Extensions — design rationale
 
-Status: proposal, decisions settled 2026-08-28
-Normative text: `SPEC.md` §6.1
-Related: `wallet-frontend#183` (WSCA migration / private data split)
+**Non-normative.** The normative rules are `SPEC.md` §6.1. Nothing in this
+document constrains an implementation; where the two appear to disagree,
+`SPEC.md` is correct.
 
-This document records *why* `S.extensions` is shaped the way it is. The
-normative rules are in `SPEC.md`; everything here is the reasoning and the
-evidence behind them, including two corrections to claims made elsewhere.
+Status: proposal, decisions settled 2026-08-28
+Related: `wallet-frontend#183` (WSCA migration / private data split),
+`wwWallet/wallet-frontend#751` (typed collections — §7)
+
+This document holds everything that is not a rule: why `S.extensions` is
+shaped as it is, the evidence behind each rule, the alternatives weighed,
+what changed under review, and two corrections to claims made in other
+documents. It exists so that `SPEC.md` can be read as a specification rather
+than an argument.
 
 ---
 
@@ -291,68 +297,13 @@ the rest.
 
 ---
 
-## 4A. Prior art: typed collections (`wwWallet/wallet-frontend#751`)
-
-`SPEC.md` Appendix A carries the full comparison. The short version, and
-what it changed here:
-
-Emil's ARKG/Split-BBS work extends the same wallet state with **typed
-collections** — `arkgSeeds[]`, `splitBbsKeypairs[]` — plus four typed
-events, a reducer per collection, and a merge strategy per event type. The
-approach was abandoned along with ARKG, but as a schema-and-merge design it
-is the closest prior art, and it independently reached three of the same
-conclusions:
-
-- merge identity is a **per-entity key** (`credentialId`), never one
-  aggregate per subsystem — §6.1.2 from the other direction;
-- **deletion is an event**, participating in the merge like creation —
-  §6.1.4's tombstones;
-- **sort by timestamp, then deduplicate by key** — literally §6.1.4's
-  last-write-wins, already working in the reference implementation.
-
-Two convergent derivations of the same rules is the best evidence available
-that they are right, so §6.1.4 is now specified to match that existing code
-rather than stating a second formulation of it.
-
-What §6.1 does differently — and this is the one demonstrable correctness
-advantage, verified in the code rather than argued:
-
-#751 merges each event type independently, and `deduplicateBy` keeps the
-*first* entry of an ascending-sorted list, so the earliest event per key
-wins within its type. Create `X` at t1, delete `X` at t2, re-create `X` at
-t3 on a diverged branch, and the `new_*` bucket deduplicates to t1 while
-discarding t3. The merged history creates `X` and then deletes it; the
-re-creation is lost.
-
-Last-write-wins on `(namespace, key)` with `null` as deletion turns the same
-sequence into `value@t1, null@t2, value@t3` → the t3 value. #751 could be
-fixed (deduplicate to the latest, or move deletion into the value); the
-point is that its shape admits the error and ours cannot express it.
-
-An earlier draft of this document claimed a broader ordering advantage.
-That was wrong: `mergeDivergentHistoriesWithStrategies` does globally
-`sort(compareBy(timestampSeconds))` before returning, so new-versus-delete
-ordering across types is sound. The re-creation case above is the real and
-narrower difference.
-
-What it does worse: no type safety inside a value, and weak
-discoverability. That is a real cost, which is why Appendix A §A.4 draws the
-line by *who needs to understand the data* — typed collections where the web
-wallet participates (renders it, names it, decides from it), extensions
-where it only carries it. A namespace SHOULD graduate to a typed collection
-if the web wallet ever needs to read inside it.
-
-Worth stealing outright: `MaybeNamed<T>`, which layers an optional
-user-facing label on a cryptographic record without the record's owner
-modelling that concern.
-
 ---
 
 ## 5. Work, by repository
 
 | Repo | Change | Owner |
 |---|---|---|
-| `privatedata-spec` | Normative §6.1; namespace registry; growth rule; legacy fields deprecated in §6.2; Appendix A; conformance vectors; conformance-runner fixes | this PR |
+| `privatedata-spec` | Normative §6.1 and registry; legacy fields deprecated in §6.2; this design document; conformance vectors; conformance-runner fixes | this PR |
 | `wallet-frontend` | `set_extension` event, generic reducer, LWW strategy, unknown-type tolerance, stale-peer resolution | separate session |
 | `siros-sdk-kotlin` | `WalletExtensionStore`; migrate WSCD + refresh-token state; add BBS holder state | native SDK work |
 | `siros-sdk-swift` | Same surface, mirrored | native SDK work |
@@ -437,3 +388,196 @@ Until step 2 lands, an SDK that emits `set_extension` events would crash
 no worse than the status quo — preserved on fold, lost on merge, exactly as
 the legacy fields behave today — while unifying three ad-hoc fields into one
 and fixing the per-entity key problem immediately.
+
+---
+
+## 7. Prior art: typed collections (`wwWallet/wallet-frontend#751`)
+
+`wwWallet/wallet-frontend#751` ("Add support for JPT with Split-BBS, and JWT
+key generation via ARKG") extends the same wallet state with two new kinds
+of client data, using a different mechanism. That work was not adopted — the
+ARKG approach it serves was superseded by the WSCD-manager design — but as a
+schema-and-merge design it is the closest prior art to §6.1, and it is
+better than §6.1 in ways worth being explicit about.
+
+### 7.1 What it does
+
+It introduces a new schema version carrying two **typed collections**:
+
+```typescript
+export type WalletStateV3 = SchemaV2.WalletState & {
+  arkgSeeds: MaybeNamed<WebauthnSignArkgPublicSeed>[],
+  splitBbsKeypairs: MaybeNamed<WebauthnSignSplitBbsKeypair>[],
+}
+```
+
+with four typed events (`new_arkg_seed`, `delete_arkg_seed`,
+`new_split_bbs_keypair`, `delete_split_bbs_keypair`), a reducer per
+collection, and a merge strategy per event type. Each strategy is the same
+shape:
+
+```typescript
+deduplicateBy(
+  a.concat(b).filter(e => e.type === 'new_arkg_seed')
+   .sort(compareBy(e => e.timestampSeconds)),
+  e => toBase64Url(e.arkgSeed.credentialId),
+)
+```
+
+### 7.2 Where it agrees, and what §6.1 takes from it
+
+Three of its choices arrived independently at the same conclusions as
+§6.1, which is the strongest available evidence that those rules are right:
+
+- **Merge identity is a per-entity key.** Deduplication is by
+  `credentialId` — one entry per authenticator credential, never one
+  aggregate per subsystem. This is §6.1.1, reached from the other
+  direction.
+- **Deletion is an event, not an absence.** `delete_arkg_seed` participates
+  in the merge exactly as the creation event does. These are §6.1.4's
+  tombstones under another name.
+- **Ordering before deduplication.** `sort(compareBy(timestampSeconds))`
+  then `deduplicateBy(key)` is precisely §6.1.4's last-write-wins, and it
+  is already proven code in the reference implementation. §6.1.4's merge
+  rule is specified to match it rather than inventing a second formulation.
+
+One further idea is worth borrowing: `MaybeNamed<T>` layers an optional
+user-facing `name` on top of a cryptographic record, so a wallet can label
+an authenticator without the record's owner having to model that. A
+namespace MAY adopt the same convention within its own entry values.
+
+### 7.3 Where the two differ
+
+| | Typed collections (#751) | `S.extensions` (§6.1) |
+|---|---|---|
+| Type safety | Full — compile-time types, exhaustive reducers | None inside a value; the value is opaque |
+| Cost of a new data kind | New event types, reducer, merge strategy, schema version, migration | One registry row |
+| Who must change | The web wallet, for every addition | Nobody, once the mechanism exists |
+| Cross-client carriage | Only clients that model the type can hold it | Any client can carry any namespace |
+| Coordination | A new data kind needs a change in the web wallet | A new data kind needs a registry row |
+| Merge correctness | A hand-written strategy per type | `lww`: one generic strategy, correctness from §6.1.1. `events`: the namespace's own, as #751 does |
+| Granularity | Any, per type | `lww`: whole entry. `events`: any, at the cost of foldability by clients without support |
+| Discoverability | Excellent — the shape is in the type system | Weak — meaning lives with the namespace owner |
+
+§6.1 also makes one class of merge error unrepresentable. #751 merges each
+event type independently — `new_*` events are deduplicated against each
+other by entity id, `delete_*` events likewise — and `deduplicateBy` retains
+the *first* entry of an ascending-sorted list, so the earliest event per key
+wins within its type. Consider one entity across a divergence:
+
+| | |
+|---|---|
+| `t1` | device A creates entity `X` |
+| `t2` | device A deletes `X` |
+| `t3` | device B, diverged, creates `X` again |
+
+The `new_*` bucket deduplicates to the `t1` creation and **discards the
+`t3` re-creation**; the `delete_*` bucket keeps `t2`. The merged history is
+then globally sorted and reduced, so `X` is created and then deleted, and
+the later re-creation is lost.
+
+Expressing deletion as a `null` value on the same `(namespace, key)` reduces
+creation and deletion to one ordered sequence per key: `value@t1`,
+`null@t2`, `value@t3` resolves to the `t3` value.
+
+This is a property of the model rather than an unfixable defect in #751 —
+deduplicating to the latest entry, or moving deletion into the value, would
+correct it. The point is that the typed-collection shape admits the error
+and the reference implementation contains it, while last-write-wins on a
+single key cannot express it.
+
+### 7.4 When to use which
+
+They are complementary, not competing.
+
+An earlier draft drew the line at whether the web wallet would *ever*
+understand the data, and offered BBS holder state as the canonical
+carry-only case. That was wrong, as review pointed out: once BBS is
+implemented in the web wallet it will need to interpret and write holder
+state to create commitments, store signatures and build presentations. The
+same objection retires the other examples — `#183` puts the WSCD manager in
+the browser, and the web wallet already implements OID4VCI. There may be no
+*permanently* opaque case at all.
+
+The distinction that survives is not *whether* a client understands the
+data but *when*:
+
+- **Use a typed collection** when the web wallet participates in the data
+  today — renders it, lets the user name or delete it, or makes decisions
+  from its contents. #751's ARKG seeds are exactly this: they appear in
+  Settings and carry user-assigned names. Type safety and UI integration
+  are worth a schema version there.
+There is also a practical asymmetry behind that line. This organisation's
+web wallet is a fork of `wwWallet/wallet-frontend`. Under the typed-collection
+model, every new native-SDK data kind requires a new event type, reducer,
+merge strategy and schema version *in the web wallet* — for state the web
+wallet cannot use and has no reason to model. That is either permanent fork
+divergence or an upstream change for someone else's data. An extension
+namespace lets the web wallet carry the state faithfully while modelling
+nothing.
+
+- **Use an extension namespace** when clients need to hold the data before
+  every client models it. Four clients on independent release cadences
+  cannot adopt a schema version simultaneously. An extension lets a native
+  SDK ship state that the web wallet carries faithfully without modelling,
+  and lets the web wallet model it later — without a flag day, and without
+  the intervening releases losing anything.
+
+So the value is **decoupling when each client learns a data kind**, not
+permanent opacity. A namespace is expected to graduate to a typed
+collection once the web wallet genuinely owns the data; §6.1.7's
+version-as-namespace rule is what makes that graduation expressible rather
+than a breaking change.
+
+That framing also sets the honest cost. For as long as a data kind lives in
+an extension, no client but its owner can validate it, render it, or reject
+a malformed value — the container carries bytes it cannot check. Typed
+collections are strictly better once the wallet owns the data, which is why
+graduation is the expected end state and not a courtesy.
+
+---
+
+## 8. Review record
+
+The normative text in `SPEC.md` §6.1 is the result of one round of review on
+[privatedata-spec#1](https://github.com/sirosfoundation/privatedata-spec/pull/1).
+Four changes came out of it, recorded here because the reasoning is not
+visible in the rules themselves.
+
+### 8.1 Last-write-wins could not be the only mode
+
+The first draft made LWW universal. Review pointed out that this permanently
+prevents resolution finer than whole-entry replacement — two devices each
+adding a distinct item to a collection cannot both survive — and that
+flattening extensions into a key-value store sits oddly in a design whose
+argument is that `events` carry more than a snapshot. Correct on both
+counts; §6.1.2 now registers a mode per namespace. See §3.0 above for why
+`lww` was kept as the default rather than adopting ignore-and-retain
+wholesale.
+
+### 8.2 Ordering on timestamp alone is not deterministic
+
+Raised indirectly, while arguing about fold determinism across clients with
+different support levels. The first draft ordered on `timestampSeconds`
+only, which lets two clients disagree about identical input. `eventId` is
+now a REQUIRED tiebreak, with a conformance vector.
+
+The broader determinism concern does not apply to `lww` — folding there is
+order-independent (§4.2a) — but it does apply to `events` mode, which is why
+such a namespace must specify its own ordering.
+
+### 8.3 A version is not meaningfully different from a new namespace
+
+The first draft declared versions fully independent and then kept migration
+rules that only mean something if they are related. Asked what actually
+distinguishes `org.siros.bbs/v2` from an unrelated namespace, the honest
+answer was: nothing. §4.2b records the resolution — migration is usually
+impossible, so the model is coexistence and drain, and a version differs
+only by a lifecycle expectation.
+
+### 8.4 The carry-only framing was wrong
+
+Review noted that the web wallet will need to interpret and write BBS holder
+state once BBS is implemented there — and BBS was the example chosen to
+illustrate permanently opaque data. §7.4 is rewritten around *when* each
+client learns a data kind rather than whether it ever does.
