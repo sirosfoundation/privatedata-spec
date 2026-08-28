@@ -134,9 +134,39 @@ namespaces underneath.
 The reducer is total and generic: assign, or delete on a `null` value.
 `wallet-frontend` never needs to know what a namespace means. The merge
 strategy is last-write-wins on `(namespace, key)` ordered by
-`timestampSeconds` — the same shape as the existing `new_presentation`
-dedupe, so it slots into the current machinery rather than sitting beside
-it.
+`(timestampSeconds, eventId)` — the same shape as the existing
+`new_presentation` dedupe, so it slots into the current machinery rather
+than sitting beside it.
+
+### 3.0 Two merge modes, after review
+
+The first draft made last-write-wins the *only* option. Review
+([PR #1](https://github.com/sirosfoundation/privatedata-spec/pull/1))
+pointed out that this permanently prevents resolution finer than whole-entry
+replacement — two devices each adding a distinct item to a collection cannot
+both survive — and that flattening extensions into a key-value store sits
+oddly in a design whose whole argument is that `events` carry more than a
+snapshot. That criticism is correct.
+
+`SPEC.md` §6.1.3 now registers a **merge mode** per namespace:
+
+- **`lww`** — the generic strategy. Any client can merge *and fold* it
+  without understanding the values, because correctness depends only on the
+  key and the ordering.
+- **`events`** — the namespace defines its own event types and reduction.
+  Clients without support MUST retain those events, MUST ignore them when
+  folding, and MUST NOT fold them.
+
+The split is not a compromise between the two designs; it is a recognition
+that they answer different questions. For entity-snapshot state — the state
+of one credential, one key, one batch — last-write-wins is *correct*, not a
+weaker approximation. For accumulating state it is simply wrong.
+
+The cost of `events` mode is stated plainly in the spec: those events
+accumulate in `events` for any client that never gains support and cannot be
+relieved by it. §6.1.4's growth rule bounds `S`; nothing bounds `events` for
+that mode. This is the trade the more expressive model asks for, and it is
+why `lww` remains the default.
 
 ### 3.1 The decision that matters: keys name entities
 
@@ -179,6 +209,28 @@ the value.
 That is checkable, unlike a byte budget. What remains is *accounting*:
 per-namespace sizes surfaced at runtime, so a container approaching the
 transport limit identifies which namespace is responsible.
+
+### 4.2a Folding `lww` is order-independent
+
+Review raised a determinism problem: under ignore-and-retain, a client
+supporting only version 1 folds v1 events past the horizon while leaving v2
+events unfolded, so the v1 events resolve first — and the folded outcome
+depends on which client folded.
+
+For `lww` namespaces this does not arise. The result for a key is the value
+of the greatest `(timestampSeconds, eventId)` among its events, so folding a
+prefix and later applying the remainder reaches the same state as folding
+everything at once. Partial support across a fleet does not make the folded
+state depend on who folded it.
+
+It does arise for `events` mode, where the reduction belongs to the
+namespace — which is why §6.1.3 requires such a namespace to specify its own
+ordering, and why §6.1.7 makes each version an independent namespace so the
+interaction cannot occur across versions.
+
+Review also exposed a genuine gap: the first draft ordered on
+`timestampSeconds` alone, which is not deterministic on equal timestamps.
+The `eventId` tiebreak is now REQUIRED.
 
 ### 4.3 A stale peer is a question for the user, not a merge
 
@@ -288,6 +340,9 @@ is why both defects in §2 went unnoticed. Six vectors close that:
 | `extensions-tombstone-001` | A tombstone deletes, and is not resurrected by a peer at the fold horizon |
 | `extensions-stale-peer-001` | A peer beyond the fold horizon is an unresolvable divergence, not a merge |
 | `extensions-size-accounting-001` | Per-namespace size accounting is reported for a large container |
+| `extensions-lww-fold-order-001` | Folding a prefix then the remainder converges with folding everything — what lets a client fold a namespace it does not understand |
+| `extensions-lww-tiebreak-001` | Equal timestamps resolve by `eventId`, identically on every client |
+| `extensions-unknown-namespace-retained-001` | An unrecognised namespace is ignored, preserved, and not an error |
 
 ### 5.2 Conformance runner
 

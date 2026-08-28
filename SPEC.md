@@ -187,41 +187,85 @@ such field carried the same unresolved data-loss note. One namespaced field
 with one generic reducer removes the per-addition cost: a new namespace is a
 registry entry, not a schema change.
 
-#### 6.1.2 Entry keys MUST name an entity
+#### 6.1.2 Entry keys MUST name an entity (`lww` namespaces)
+
+This section applies to namespaces in `lww` mode (§6.1.3); an `events`-mode
+namespace defines its own state shape and its own resolution.
 
 An entry key MUST identify a single entity that the wallet already tracks —
 a key identifier, a credential identifier, a batch identifier. An entry key
 MUST NOT name a subsystem, a plugin, or a category.
 
 This is a correctness requirement, not a style preference. Merge resolution
-is last-write-wins per `(namespace, key)` (§6.1.4). A namespace that stores
+is last-write-wins per `(namespace, key)` (§6.1.5). A namespace that stores
 one aggregate value per subsystem therefore loses data whenever two devices
 write concurrently: two devices each enrolling a different authenticator
 produce two whole-subsystem blobs, and one silently wins. Keyed per entity,
 the same two writes touch disjoint keys and merge without conflict.
 
-#### 6.1.3 Size MUST be bounded by entities, not by history
+#### 6.1.3 Merge modes
+
+A namespace declares, at registration, how its events merge. Two modes are
+defined, and the choice determines what a client that does not understand
+the namespace is able to do with it.
+
+**`lww` (default).** State is a map from entry key to opaque value, and
+resolution is last-write-wins per `(namespace, key)`. A client can merge and
+fold an `lww` namespace **without understanding its values**, because
+correctness depends only on the key and the event ordering.
+
+**`events`.** The namespace defines its own event types and its own
+reduction, and therefore its own merge semantics. This is the mode to
+choose when resolution must be finer-grained than whole-entry replacement —
+for example when two devices each add a distinct item to a collection and
+both additions must survive.
+
+`lww` is the default because it is sufficient for entity-snapshot state,
+where an entry is the current state of one entity and the newest write is
+by definition the right one. It is not a lesser mode for such data; it is
+the correct one.
+
+`events` is more expressive, and costs more:
+
+- A client that does not understand the namespace MUST retain its events,
+  MUST ignore them when folding, and MUST NOT fold them into `S`. Only a
+  client that understands the namespace may fold them.
+- Consequently such events accumulate in `events` for any client that never
+  gains support, and cannot be relieved by that client. §6.1.4's growth
+  rule bounds `S`; it cannot bound `events` for this mode.
+- The namespace MUST specify its own event ordering, including ordering
+  with respect to other versions of itself (§6.1.7).
+
+A namespace SHOULD use `lww` unless it can state a concrete case where
+whole-entry replacement loses information.
+
+#### 6.1.4 Size MUST be bounded by entities, not by history
 
 An implementation cannot in general predict how large a namespace becomes —
 it grows with enrolled authenticators, issued credentials, or renewable
 batches. This specification therefore constrains growth rather than size:
 
-- A namespace's total size MUST be proportional to entities the user can
+- A namespace's state size MUST be proportional to entities the user can
   enumerate and delete.
-- A namespace MUST NOT grow with the number of events. In particular, an
-  entry value MUST NOT accumulate an append-only history; only current state
-  belongs in an entry.
-- Deleting the entity a key names MUST delete the entry (§6.1.4).
+- A namespace MUST NOT grow its **state** with the number of events. In
+  particular, an entry value MUST NOT accumulate an append-only history;
+  only current state belongs in an entry.
+- Deleting the entity a key names MUST delete the entry (§6.1.5).
+
+This bounds `S`. For `events`-mode namespaces it does not bound `events`,
+because a client without support cannot fold them away; see §6.1.3.
 
 Implementations SHOULD report per-namespace sizes, so that a container
 approaching the transport limit identifies which namespace is responsible.
 
-#### 6.1.4 Events, reduction and merge
+#### 6.1.5 Events, reduction and merge
 
 `S` is a fold cache; `events` are the source of truth (§6, §8). State
 written only into `S` is not reconstructible after a history merge, which
 replays events onto a common-ancestor base state. Extension state therefore
-MUST be written as events:
+MUST be written as events.
+
+For an `lww` namespace the event is:
 
 ```json
 {
@@ -239,13 +283,32 @@ MUST be written as events:
 - Reduction: set `S.extensions[namespace][key]` to `value`.
 - A `value` of `null` is a **tombstone**: reduction MUST delete the key.
 - Merge: last-write-wins per `(namespace, key)`, ordered by
-  `timestampSeconds`.
+  `timestampSeconds` and, where those are equal, by `eventId`. The
+  tiebreak is REQUIRED: ordering on timestamp alone is not deterministic
+  between clients.
 
 Tombstones MUST survive event-history folding for at least as long as the
-maximum permitted time between folds (§6.1.5); otherwise a merge with a
+maximum permitted time between folds (§6.1.6); otherwise a merge with a
 long-absent peer resurrects a deleted entry.
 
-#### 6.1.5 Peers beyond the fold horizon
+**Folding an `lww` namespace is order-independent.** For a given key the
+result is the value of the greatest `(timestampSeconds, eventId)` among all
+events for that key, whether a client folds a prefix of the history or all
+of it. A client that folds events 1–3 and later applies 4–5 reaches the same
+state as a client that folds 1–5. This is why an `lww` namespace can be
+folded by a client that does not understand it, and why partial support
+across a fleet does not make the folded state depend on which client did
+the folding.
+
+That guarantee does not extend to `events` mode, where the reduction is the
+namespace's own and a client without support must leave the events alone
+(§6.1.3).
+
+Clients MUST ignore, and MUST preserve, extension events for namespaces
+they do not recognise, in either mode. An unrecognised namespace is not an
+error.
+
+#### 6.1.6 Peers beyond the fold horizon
 
 Implementations fold event history older than a configured horizon into `S`.
 A peer that has not synchronised within that horizon no longer shares a
@@ -258,16 +321,50 @@ the user choose which wallet is authoritative. Concatenating the two
 histories produces an invalid event chain and MUST NOT be treated as a
 merge result.
 
-#### 6.1.6 Namespace registry
+#### 6.1.7 Versions and dependencies
+
+**A version is a new namespace.** A namespace identifier MAY carry a version
+suffix (`org.siros.bbs/v2`), and a versioned namespace is independent of its
+predecessor: it has its own registry entry, its own merge mode, and its own
+state under `S.extensions`. Clients MUST NOT assume that support for one
+version implies support for another.
+
+This rule exists to keep folding deterministic across a fleet with mixed
+support. If versions of one namespace shared state, a client supporting only
+the earlier version could fold its events while leaving the later version's
+events unfolded, resolving them in an order that a fully-supporting client
+would not have chosen — and the folded outcome would depend on which client
+folded. Independent namespaces remove the interaction.
+
+Migration between versions is the owning extension's responsibility and MUST
+be performed by a client that supports both. A client that supports only one
+version MUST NOT delete another version's state.
+
+A support index — clients advertising which namespaces they understand, so
+that superseded state can be retired once no participant needs it — was
+considered and is deliberately not specified. A client that writes such an
+index once and never returns (for example after local state is erased)
+freezes every other client at its support level indefinitely, and resolving
+that requires a second liveness horizon. Under the rules above, superseded
+state instead remains bounded by §6.1.4 and may be retired by a client that
+supports both versions.
+
+**Dependencies MUST be declared.** If a namespace's correct processing
+depends on another namespace — such that reducing its events while ignoring
+the other's would produce wrong state — the dependent namespace's
+registration MUST declare that dependency, and a client that supports the
+dependent namespace MUST also support the one it depends on.
+
+#### 6.1.8 Namespace registry
 
 Namespaces are reverse-DNS strings and are registered here. Registration is
 a change to this document.
 
-| Namespace | Owner | Entry key | Value |
-|---|---|---|---|
-| `org.siros.wscd` | WSCD plugins (native SDKs) | `kid` | Key metadata needed to address a key created on a roaming authenticator — never private key material |
-| `org.siros.bbs` | Blind BBS credentials (native SDKs) | credential id | Holder state a BBS credential cannot be presented without: blinding factor, committed messages, bound key binding public keys |
-| `org.siros.oid4vci.refresh` | OID4VCI renewal (native SDKs) | `batchId` | `refresh_token` and the DPoP key it is bound to, per renewable batch |
+| Namespace | Owner | Mode | Entry key | Value | Depends on |
+|---|---|---|---|---|---|
+| `org.siros.wscd` | WSCD plugins (native SDKs) | `lww` | `kid` | Key metadata needed to address a key created on a roaming authenticator: credential handle, public key, plugin identity — never private key material | — |
+| `org.siros.bbs` | Blind BBS credentials (native SDKs) | `lww` | credential id | Holder state a BBS credential cannot be presented without: the blinding factor, the committed messages, the bound key binding public keys, and the key handles needed to exercise the key binding private keys | `org.siros.wscd` |
+| `org.siros.oid4vci.refresh` | OID4VCI renewal (native SDKs) | `lww` | `batchId` | `refresh_token` and the DPoP key it is bound to, per renewable batch | — |
 
 ### 6.2 Legacy top-level extension fields (deprecated)
 
@@ -372,7 +469,8 @@ namespace MAY adopt the same convention within its own entry values.
 | Who must change | The web wallet, for every addition | Nobody, once the mechanism exists |
 | Cross-client carriage | Only clients that model the type can hold it | Any client can carry any namespace |
 | Coordination | A new data kind needs a change in the web wallet | A new data kind needs a registry row |
-| Merge correctness | A hand-written strategy per type | One generic strategy; correctness comes from §6.1.2 |
+| Merge correctness | A hand-written strategy per type | `lww`: one generic strategy, correctness from §6.1.2. `events`: the namespace's own, as #751 does |
+| Granularity | Any, per type | `lww`: whole entry. `events`: any, at the cost of foldability by clients without support |
 | Discoverability | Excellent — the shape is in the type system | Weak — meaning lives with the namespace owner |
 
 §6.1 also makes one class of merge error unrepresentable. #751 merges each
@@ -404,11 +502,22 @@ single key cannot express it.
 
 ### A.4 When to use which
 
-They are complementary, not competing, and the distinction is who needs to
-understand the data:
+They are complementary, not competing.
 
-- **Use a typed collection** when the web wallet itself participates in the
-  data — renders it, lets the user name or delete it, or makes decisions
+An earlier draft drew the line at whether the web wallet would *ever*
+understand the data, and offered BBS holder state as the canonical
+carry-only case. That was wrong, as review pointed out: once BBS is
+implemented in the web wallet it will need to interpret and write holder
+state to create commitments, store signatures and build presentations. The
+same objection retires the other examples — `#183` puts the WSCD manager in
+the browser, and the web wallet already implements OID4VCI. There may be no
+*permanently* opaque case at all.
+
+The distinction that survives is not *whether* a client understands the
+data but *when*:
+
+- **Use a typed collection** when the web wallet participates in the data
+  today — renders it, lets the user name or delete it, or makes decisions
   from its contents. #751's ARKG seeds are exactly this: they appear in
   Settings and carry user-assigned names. Type safety and UI integration
   are worth a schema version there.
@@ -421,14 +530,21 @@ divergence or an upstream change for someone else's data. An extension
 namespace lets the web wallet carry the state faithfully while modelling
 nothing.
 
-- **Use an extension namespace** when the data is opaque to the web wallet
-  and owned by another client. WSCD key metadata, BBS holder state and
-  OID4VCI refresh material are all in this category: the web wallet needs
-  to carry them faithfully and nothing more. Requiring it to model those
-  types is pure cost, and it is the cost that produced the
-  "not yet normative" fields in §6.2.
+- **Use an extension namespace** when clients need to hold the data before
+  every client models it. Four clients on independent release cadences
+  cannot adopt a schema version simultaneously. An extension lets a native
+  SDK ship state that the web wallet carries faithfully without modelling,
+  and lets the web wallet model it later — without a flag day, and without
+  the intervening releases losing anything.
 
-A namespace SHOULD graduate to a typed collection if the web wallet ever
-needs to interpret its contents. Extensions are the right home for state in
-transit between clients, not a permanent substitute for modelling state the
-wallet genuinely owns.
+So the value is **decoupling when each client learns a data kind**, not
+permanent opacity. A namespace is expected to graduate to a typed
+collection once the web wallet genuinely owns the data; §6.1.7's
+version-as-namespace rule is what makes that graduation expressible rather
+than a breaking change.
+
+That framing also sets the honest cost. For as long as a data kind lives in
+an extension, no client but its owner can validate it, render it, or reject
+a malformed value — the container carries bytes it cannot check. Typed
+collections are strictly better once the wallet owns the data, which is why
+graduation is the expected end state and not a courtesy.
