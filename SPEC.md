@@ -407,5 +407,12 @@ Backend optimistic concurrency is part of privateData lifecycle:
 
 Design rationale, the evidence behind these rules, and a comparison with the
 typed-collection approach of `wwWallet/wallet-frontend#751` are in
-[`docs/EXTENSIONS-DESIGN.md`](docs/EXTENSIONS-DESIGN.md). That document is
-non-normative.
+[`docs/EXTENSIONS-DESIGN.md`](docs/EXTENSIONS-DESIGN.md).
+
+An alternative in which the state layer is a CRDT document rather than an
+event log — which would remove the need for §6.1 entirely — is specified for
+comparison in
+[`docs/SPEC-ALTERNATIVE-AUTOMERGE.md`](docs/SPEC-ALTERNATIVE-AUTOMERGE.md).
+Sequencing for both is in [`docs/ROLLOUT-PLAN.md`](docs/ROLLOUT-PLAN.md).
+
+All three documents are non-normative.
