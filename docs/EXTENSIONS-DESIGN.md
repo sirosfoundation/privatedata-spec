@@ -231,11 +231,26 @@ Two convergent derivations of the same rules is the best evidence available
 that they are right, so §6.1.4 is now specified to match that existing code
 rather than stating a second formulation of it.
 
-What §6.1 does differently: with separate `new_*` and `delete_*` event
-types, the outcome for an entity depends on how the two merged histories
-interleave. Expressing deletion as a `null` value on the same
-`(namespace, key)` reduces creation and deletion to one ordered sequence per
-key, so the new-versus-delete ordering question does not arise.
+What §6.1 does differently — and this is the one demonstrable correctness
+advantage, verified in the code rather than argued:
+
+#751 merges each event type independently, and `deduplicateBy` keeps the
+*first* entry of an ascending-sorted list, so the earliest event per key
+wins within its type. Create `X` at t1, delete `X` at t2, re-create `X` at
+t3 on a diverged branch, and the `new_*` bucket deduplicates to t1 while
+discarding t3. The merged history creates `X` and then deletes it; the
+re-creation is lost.
+
+Last-write-wins on `(namespace, key)` with `null` as deletion turns the same
+sequence into `value@t1, null@t2, value@t3` → the t3 value. #751 could be
+fixed (deduplicate to the latest, or move deletion into the value); the
+point is that its shape admits the error and ours cannot express it.
+
+An earlier draft of this document claimed a broader ordering advantage.
+That was wrong: `mergeDivergentHistoriesWithStrategies` does globally
+`sort(compareBy(timestampSeconds))` before returning, so new-versus-delete
+ordering across types is sound. The re-creation case above is the real and
+narrower difference.
 
 What it does worse: no type safety inside a value, and weak
 discoverability. That is a real cost, which is why Appendix A §A.4 draws the

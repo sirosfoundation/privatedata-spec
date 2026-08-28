@@ -371,15 +371,36 @@ namespace MAY adopt the same convention within its own entry values.
 | Cost of a new data kind | New event types, reducer, merge strategy, schema version, migration | One registry row |
 | Who must change | The web wallet, for every addition | Nobody, once the mechanism exists |
 | Cross-client carriage | Only clients that model the type can hold it | Any client can carry any namespace |
+| Coordination | A new data kind needs a change in the web wallet | A new data kind needs a registry row |
 | Merge correctness | A hand-written strategy per type | One generic strategy; correctness comes from §6.1.2 |
 | Discoverability | Excellent — the shape is in the type system | Weak — meaning lives with the namespace owner |
 
-§6.1 also collapses one axis that #751 leaves open. With separate `new_*`
-and `delete_*` event types, the outcome for an entity depends on how those
-two merged histories interleave. Last-write-wins on `(namespace, key)`, with
-deletion expressed as a `null` value rather than a distinct event type,
-reduces creation and deletion to a single ordered sequence per key, so no
-new-versus-delete ordering question arises.
+§6.1 also makes one class of merge error unrepresentable. #751 merges each
+event type independently — `new_*` events are deduplicated against each
+other by entity id, `delete_*` events likewise — and `deduplicateBy` retains
+the *first* entry of an ascending-sorted list, so the earliest event per key
+wins within its type. Consider one entity across a divergence:
+
+| | |
+|---|---|
+| `t1` | device A creates entity `X` |
+| `t2` | device A deletes `X` |
+| `t3` | device B, diverged, creates `X` again |
+
+The `new_*` bucket deduplicates to the `t1` creation and **discards the
+`t3` re-creation**; the `delete_*` bucket keeps `t2`. The merged history is
+then globally sorted and reduced, so `X` is created and then deleted, and
+the later re-creation is lost.
+
+Expressing deletion as a `null` value on the same `(namespace, key)` reduces
+creation and deletion to one ordered sequence per key: `value@t1`,
+`null@t2`, `value@t3` resolves to the `t3` value.
+
+This is a property of the model rather than an unfixable defect in #751 —
+deduplicating to the latest entry, or moving deletion into the value, would
+correct it. The point is that the typed-collection shape admits the error
+and the reference implementation contains it, while last-write-wins on a
+single key cannot express it.
 
 ### A.4 When to use which
 
@@ -391,6 +412,15 @@ understand the data:
   from its contents. #751's ARKG seeds are exactly this: they appear in
   Settings and carry user-assigned names. Type safety and UI integration
   are worth a schema version there.
+There is also a practical asymmetry behind that line. This organisation's
+web wallet is a fork of `wwWallet/wallet-frontend`. Under the typed-collection
+model, every new native-SDK data kind requires a new event type, reducer,
+merge strategy and schema version *in the web wallet* — for state the web
+wallet cannot use and has no reason to model. That is either permanent fork
+divergence or an upstream change for someone else's data. An extension
+namespace lets the web wallet carry the state faithfully while modelling
+nothing.
+
 - **Use an extension namespace** when the data is opaque to the web wallet
   and owned by another client. WSCD key metadata, BBS holder state and
   OID4VCI refresh material are all in this category: the web wallet needs
