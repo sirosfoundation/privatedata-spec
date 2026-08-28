@@ -232,6 +232,37 @@ Review also exposed a genuine gap: the first draft ordered on
 `timestampSeconds` alone, which is not deterministic on equal timestamps.
 The `eventId` tiebreak is now REQUIRED.
 
+### 4.2b What a version actually is
+
+"A version is a new namespace" removes the cross-version fold interaction,
+but taken literally it leaves nothing distinguishing `org.siros.bbs/v2` from
+an unrelated namespace — while §6.1.7 originally kept migration rules that
+only mean something if the two *are* related. That was inconsistent.
+
+Working it through against real namespaces resolves it. A v2 of
+`org.siros.bbs` would exist because what a BBS credential carries changed —
+a pseudonym slot, say. At that point v2 state cannot be synthesised for a v1
+credential: the blinding factor and committed messages come from an issuance
+handshake that cannot be replayed. The credential would be re-issued. The
+same holds for `org.siros.wscd`: new metadata fields cannot be invented for
+a key already on an authenticator; it would be re-enrolled.
+
+So migration is not under-specified, it is usually **impossible**, and the
+real model is coexistence and drain:
+
+- an entity's state lives under whichever version was current when the
+  entity was created;
+- new entities go to the newest supported version;
+- old versions drain as their entities are deleted, which §6.1.4 already
+  requires;
+- nothing migrates, and no client deletes another version's state.
+
+A version therefore differs from an unrelated namespace only by a lifecycle
+expectation — same class of entity, predecessor is legacy-but-live — and not
+by any format mechanism. That is also why no client support index is needed:
+it answers "when can superseded state be retired", and nothing retires
+superseded state.
+
 ### 4.3 A stale peer is a question for the user, not a merge
 
 Tombstones must outlive the fold horizon, or a merge with a long-absent
@@ -343,6 +374,7 @@ is why both defects in §2 went unnoticed. Six vectors close that:
 | `extensions-lww-fold-order-001` | Folding a prefix then the remainder converges with folding everything — what lets a client fold a namespace it does not understand |
 | `extensions-lww-tiebreak-001` | Equal timestamps resolve by `eventId`, identically on every client |
 | `extensions-unknown-namespace-retained-001` | An unrecognised namespace is ignored, preserved, and not an error |
+| `extensions-version-coexistence-001` | Two versions of one namespace coexist; neither client deletes nor migrates the other's state |
 
 ### 5.2 Conformance runner
 

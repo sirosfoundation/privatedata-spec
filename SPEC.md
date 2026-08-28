@@ -324,30 +324,64 @@ merge result.
 #### 6.1.7 Versions and dependencies
 
 **A version is a new namespace.** A namespace identifier MAY carry a version
-suffix (`org.siros.bbs/v2`), and a versioned namespace is independent of its
-predecessor: it has its own registry entry, its own merge mode, and its own
-state under `S.extensions`. Clients MUST NOT assume that support for one
-version implies support for another.
+suffix (`org.siros.bbs/v2`). A versioned namespace is independent of its
+predecessor: its own registry entry, its own merge mode, its own state under
+`S.extensions`. Clients MUST NOT assume that support for one version implies
+support for another.
 
-This rule exists to keep folding deterministic across a fleet with mixed
-support. If versions of one namespace shared state, a client supporting only
-the earlier version could fold its events while leaving the later version's
-events unfolded, resolving them in an order that a fully-supporting client
-would not have chosen — and the folded outcome would depend on which client
-folded. Independent namespaces remove the interaction.
+This keeps folding deterministic across a fleet with mixed support. If
+versions of one namespace shared state, a client supporting only the earlier
+version could fold its events while leaving the later version's unfolded,
+resolving them in an order a fully-supporting client would not have chosen,
+and the folded outcome would depend on which client folded. Independent
+namespaces remove the interaction.
 
-Migration between versions is the owning extension's responsibility and MUST
-be performed by a client that supports both. A client that supports only one
-version MUST NOT delete another version's state.
+##### What a version is, then
 
-A support index — clients advertising which namespaces they understand, so
-that superseded state can be retired once no participant needs it — was
-considered and is deliberately not specified. A client that writes such an
-index once and never returns (for example after local state is erased)
-freezes every other client at its support level indefinitely, and resolving
-that requires a second liveness horizon. Under the rules above, superseded
-state instead remains bounded by §6.1.4 and may be retired by a client that
-supports both versions.
+Mechanically, nothing distinguishes `org.siros.bbs/v2` from an unrelated
+namespace. The distinction is a **lifecycle expectation**, and it is
+deliberately not a format mechanism:
+
+- Both versions name the same class of entity.
+- An entity's state lives under whichever version was current when that
+  entity was created.
+- New entities go to the newest version their creating client supports.
+- The older version **drains**: its entries disappear as their entities are
+  deleted, which §6.1.4 already requires.
+
+Registering a namespace as a version of another therefore tells an
+implementer that its predecessor's entries are legacy-but-live rather than
+an unrelated concern, and that new entities belong in the newer one. It
+grants no authority over the predecessor's state.
+
+##### Migration is usually impossible, and is never required
+
+Extension state is typically derived from an interaction that cannot be
+replayed. A blind BBS credential's holder state comes from an issuance
+handshake; WSCD key metadata describes a key already created on an
+authenticator. Where the newer version needs information the older one
+never captured, no client can synthesise it — the entity must be created
+again (re-issued, re-enrolled) to obtain state in the newer shape.
+
+Consequently:
+
+- Clients MUST NOT be required to migrate extension state between versions.
+- Coexistence is the normal steady state, not a transitional one. A
+  container MAY hold both versions indefinitely.
+- A client MUST NOT delete state belonging to a version it does not
+  support.
+- Where a newer version's state *is* derivable from the older, that
+  namespace's registration MAY specify a migration, which MUST then be
+  performed only by a client supporting both versions.
+
+This is why no client support index is specified. Such an index — clients
+advertising which namespaces they understand, so superseded state can be
+retired once no participant needs it — answers a question that does not
+arise here: nothing retires superseded state, because entries are removed by
+the deletion of the entities they name and by nothing else. The index also
+has a failure mode of its own, in that a client which writes one and never
+returns freezes every other client at its support level until some second
+liveness horizon expires.
 
 **Dependencies MUST be declared.** If a namespace's correct processing
 depends on another namespace — such that reducing its events while ignoring
