@@ -24,8 +24,8 @@ onward.
 This alternative stores a single Automerge document. Merge is a property of
 the document type rather than a procedure clients implement, which removes
 the merge strategies, the event chain, the fold horizon, and the entire
-extension mechanism of `SPEC.md` §6.1 — including namespaces, merge modes,
-entry-key rules, the registry and version-as-namespace.
+extension mechanism of `SPEC.md` §6.1 — namespaces, entry-key rules, the
+registry and version-as-namespace.
 
 ## 2. Plaintext
 
