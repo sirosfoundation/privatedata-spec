@@ -101,7 +101,7 @@ Wall-clock timestamps MUST NOT be used to order changes. A device with an
 incorrect clock would otherwise win or lose arbitrarily, and two devices with
 equal timestamps would not converge.
 
-`SPEC.md` §6.1.4 requires a `(timestampSeconds, eventId)` tiebreak precisely
+`SPEC.md` §6.1.3 requires a `(timestampSeconds, eventId)` tiebreak precisely
 because it orders on wall time. That requirement does not arise here.
 
 ### 3.2 No fold horizon
@@ -109,7 +109,7 @@ because it orders on wall time. That requirement does not arise here.
 Clients MAY compact document history. Compaction MUST NOT remove the ability
 to merge with a peer holding older changes.
 
-`SPEC.md` §6.1.5 requires that a peer beyond the fold horizon be surfaced to
+`SPEC.md` §6.1.4 requires that a peer beyond the fold horizon be surfaced to
 the user as an unresolvable divergence, because folding destroys the common
 ancestor a linear history needs. Convergence here does not depend on a
 reachable common ancestor, so that case does not exist and the rule is
@@ -184,7 +184,8 @@ content, causality instead of wall time, and no fold horizon.
 | State | `S` fold cache + `events[]` chain | one Automerge document |
 | Merge | hand-written strategy per event type | property of the document type |
 | Unknown content | crashes the merge until tolerance lands | merges correctly, always |
-| Extension mechanism | namespaces, modes, registry, versions (§6.1) | none needed |
+| Extension mechanism | namespaces, registry, versions (§6.1) | none needed |
+| Merge granularity | whole entry; finer resolution deliberately not offered | any, by construction |
 | Ordering | wall clock + required tiebreak | Lamport clocks + actor ids |
 | Fold horizon | destroys mergeability; user must resolve | no equivalent |
 | Identifier discipline | MUST name an entity (§6.1.1) | MUST be uncoordinated (§2.3) |

@@ -144,37 +144,24 @@ strategy is last-write-wins on `(namespace, key)` ordered by
 `new_presentation` dedupe, so it slots into the current machinery rather
 than sitting beside it.
 
-### 3.0 Two merge modes, after review
+### 3.0 One merge mode, after two rounds of review
 
-The first draft made last-write-wins the *only* option. Review
+The first draft made last-write-wins the only option. Review
 ([PR #1](https://github.com/sirosfoundation/privatedata-spec/pull/1))
 pointed out that this permanently prevents resolution finer than whole-entry
 replacement — two devices each adding a distinct item to a collection cannot
 both survive — and that flattening extensions into a key-value store sits
 oddly in a design whose whole argument is that `events` carry more than a
-snapshot. That criticism is correct.
+snapshot. That criticism is correct, and a second `events` mode was added in
+response: the namespace defining its own event types and reduction, with
+clients that did not support it required to retain, ignore, and never fold
+those events.
 
-`SPEC.md` §6.1.3 now registers a **merge mode** per namespace:
+**It has since been removed, and last-write-wins is again the only mode.**
+Not because the criticism was wrong, but because the capability was being
+paid for twice. See §9.
 
-- **`lww`** — the generic strategy. Any client can merge *and fold* it
-  without understanding the values, because correctness depends only on the
-  key and the ordering.
-- **`events`** — the namespace defines its own event types and reduction.
-  Clients without support MUST retain those events, MUST ignore them when
-  folding, and MUST NOT fold them.
-
-The split is not a compromise between the two designs; it is a recognition
-that they answer different questions. For entity-snapshot state — the state
-of one credential, one key, one batch — last-write-wins is *correct*, not a
-weaker approximation. For accumulating state it is simply wrong.
-
-The cost of `events` mode is stated plainly in the spec: those events
-accumulate in `events` for any client that never gains support and cannot be
-relieved by it. §6.1.4's growth rule bounds `S`; nothing bounds `events` for
-that mode. This is the trade the more expressive model asks for, and it is
-why `lww` remains the default.
-
-### 3.1 The decision that matters: keys name entities
+### 3.1 The decision that matters: keys name entities### 3.1 The decision that matters: keys name entities
 
 `S.wscdCredentials.fido2` is one opaque blob for a whole plugin, and
 last-write-wins on *that* is data loss: two devices each enrolling a
@@ -205,7 +192,7 @@ with enrolled authenticators, issued credentials, renewable batches. Any
 number picked up front is either uselessly generous or a ceiling someone
 hits in production.
 
-So §6.1.3 constrains *growth* instead: extension state MUST be proportional
+So §6.1.2 constrains *growth* instead: extension state MUST be proportional
 to entities the user can enumerate and delete, and MUST NOT grow with event
 count — in particular, no append-only history inside an entry value.
 Last-write-wins already gives this, since only the newest value per key is
@@ -216,23 +203,22 @@ That is checkable, unlike a byte budget. What remains is *accounting*:
 per-namespace sizes surfaced at runtime, so a container approaching the
 transport limit identifies which namespace is responsible.
 
-### 4.2a Folding `lww` is order-independent
+### 4.2a Folding is order-independent
 
 Review raised a determinism problem: under ignore-and-retain, a client
 supporting only version 1 folds v1 events past the horizon while leaving v2
 events unfolded, so the v1 events resolve first — and the folded outcome
 depends on which client folded.
 
-For `lww` namespaces this does not arise. The result for a key is the value
-of the greatest `(timestampSeconds, eventId)` among its events, so folding a
-prefix and later applying the remainder reaches the same state as folding
-everything at once. Partial support across a fleet does not make the folded
-state depend on who folded it.
+This does not arise. The result for a key is the value of the greatest
+`(timestampSeconds, eventId)` among its events, so folding a prefix and
+later applying the remainder reaches the same state as folding everything at
+once. Partial support across a fleet does not make the folded state depend
+on who folded it.
 
-It does arise for `events` mode, where the reduction belongs to the
-namespace — which is why §6.1.3 requires such a namespace to specify its own
-ordering, and why §6.1.7 makes each version an independent namespace so the
-interaction cannot occur across versions.
+It would have arisen under the `events` mode described in §3.0, where the
+reduction belongs to the namespace — one of several reasons that mode is no
+longer specified (§9).
 
 Review also exposed a genuine gap: the first draft ordered on
 `timestampSeconds` alone, which is not deterministic on equal timestamps.
@@ -242,7 +228,7 @@ The `eventId` tiebreak is now REQUIRED.
 
 "A version is a new namespace" removes the cross-version fold interaction,
 but taken literally it leaves nothing distinguishing `org.siros.bbs/v2` from
-an unrelated namespace — while §6.1.7 originally kept migration rules that
+an unrelated namespace — while §6.1.5 originally kept migration rules that
 only mean something if the two *are* related. That was inconsistent.
 
 Working it through against real namespaces resolves it. A v2 of
@@ -277,7 +263,7 @@ general case: once a peer has been away longer than the horizon, its merge
 base has been folded into `S` and is gone, so no correct merge exists for
 *any* state — extensions included.
 
-The resolution (§6.1.5) is a maximum time between folds. When a returning
+The resolution (§6.1.4) is a maximum time between folds. When a returning
 wallet exceeds it, the histories are not silently reconciled; the user is
 asked which wallet is authoritative.
 
@@ -437,8 +423,8 @@ Three of its choices arrived independently at the same conclusions as
   in the merge exactly as the creation event does. These are §6.1.4's
   tombstones under another name.
 - **Ordering before deduplication.** `sort(compareBy(timestampSeconds))`
-  then `deduplicateBy(key)` is precisely §6.1.4's last-write-wins, and it
-  is already proven code in the reference implementation. §6.1.4's merge
+  then `deduplicateBy(key)` is precisely §6.1.3's last-write-wins, and it
+  is already proven code in the reference implementation. §6.1.3's merge
   rule is specified to match it rather than inventing a second formulation.
 
 One further idea is worth borrowing: `MaybeNamed<T>` layers an optional
@@ -455,8 +441,8 @@ namespace MAY adopt the same convention within its own entry values.
 | Who must change | The web wallet, for every addition | Nobody, once the mechanism exists |
 | Cross-client carriage | Only clients that model the type can hold it | Any client can carry any namespace |
 | Coordination | A new data kind needs a change in the web wallet | A new data kind needs a registry row |
-| Merge correctness | A hand-written strategy per type | `lww`: one generic strategy, correctness from §6.1.1. `events`: the namespace's own, as #751 does |
-| Granularity | Any, per type | `lww`: whole entry. `events`: any, at the cost of foldability by clients without support |
+| Merge correctness | A hand-written strategy per type | One generic strategy; correctness comes from §6.1.1 |
+| Granularity | Any, per type | Whole entry — finer resolution is deliberately not offered (§9) |
 | Discoverability | Excellent — the shape is in the type system | Weak — meaning lives with the namespace owner |
 
 §6.1 also makes one class of merge error unrepresentable. #751 merges each
@@ -525,7 +511,7 @@ nothing.
 
 So the value is **decoupling when each client learns a data kind**, not
 permanent opacity. A namespace is expected to graduate to a typed
-collection once the web wallet genuinely owns the data; §6.1.7's
+collection once the web wallet genuinely owns the data; §6.1.5's
 version-as-namespace rule is what makes that graduation expressible rather
 than a breaking change.
 
@@ -551,9 +537,8 @@ prevents resolution finer than whole-entry replacement — two devices each
 adding a distinct item to a collection cannot both survive — and that
 flattening extensions into a key-value store sits oddly in a design whose
 argument is that `events` carry more than a snapshot. Correct on both
-counts; §6.1.2 now registers a mode per namespace. See §3.0 above for why
-`lww` was kept as the default rather than adopting ignore-and-retain
-wholesale.
+counts. A second mode was added in response and has since been removed;
+see §3.0 and §9.
 
 ### 8.2 Ordering on timestamp alone is not deterministic
 
@@ -562,9 +547,9 @@ different support levels. The first draft ordered on `timestampSeconds`
 only, which lets two clients disagree about identical input. `eventId` is
 now a REQUIRED tiebreak, with a conformance vector.
 
-The broader determinism concern does not apply to `lww` — folding there is
-order-independent (§4.2a) — but it does apply to `events` mode, which is why
-such a namespace must specify its own ordering.
+The broader determinism concern does not apply to last-write-wins — folding
+is order-independent (§4.2a). It would have applied to the `events` mode
+added in response to §8.1 and since removed (§9).
 
 ### 8.3 A version is not meaningfully different from a new namespace
 
@@ -581,3 +566,46 @@ Review noted that the web wallet will need to interpret and write BBS holder
 state once BBS is implemented there — and BBS was the example chosen to
 illustrate permanently opaque data. §7.4 is rewritten around *when* each
 client learns a data kind rather than whether it ever does.
+
+---
+
+## 9. `events` mode: considered, specified, removed
+
+Between the first and second rounds of review, `SPEC.md` §6.1 carried a
+second merge mode. A namespace could declare `events` instead of the default
+last-write-wins, defining its own event types and reduction; clients without
+support were required to retain those events, ignore them when folding, and
+never fold them into `S`.
+
+It is no longer specified. The reasoning, recorded because the capability was
+asked for in review and the removal reverses that answer:
+
+**It had no users.** Every namespace in the registry is entity-snapshot
+state — one credential's holder state, one key's metadata, one batch's
+refresh material. For all three, last-write-wins is *correct*, not a weaker
+approximation. Nothing needed the finer granularity, so every rule in the
+mode was unvalidated by any implementation. This repository already
+demonstrated where that leads: §6.1 and §6.2 were cited by
+`wallet-frontend#183` and by native-SDK source comments while existing only
+as uncommitted local edits, never published.
+
+**It was the most expensive thing in the specification.** Retain-and-ignore
+obligations, per-namespace ordering rules, an explicit carve-out from the
+growth rule, and the admission that `events` grows without bound for any
+client that never gains support. Removing it took `SPEC.md` from six
+subsections to five and deleted the only rule the document could not bound.
+
+**The capability was being paid for twice.** Fine-grained convergent merge is
+exactly what a CRDT provides by construction, and
+[`SPEC-ALTERNATIVE-AUTOMERGE.md`](SPEC-ALTERNATIVE-AUTOMERGE.md) specifies
+that alternative. Building a partial, hand-rolled version of it inside an
+event log — one that only works for clients that already understand the
+namespace — buys a fraction of the capability at most of the cost, and would
+have to be maintained alongside whichever answer wins.
+
+**What this concedes.** The review criticism stands: last-write-wins cannot
+express two devices each adding a distinct item to a collection, and that is
+a real limitation, not a theoretical one. The position is not that the
+limitation is acceptable forever. It is that the general fix does not belong
+in this layer, and that the first namespace to genuinely need it should make
+the case then — by which time the alternative may have answered it.

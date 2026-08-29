@@ -174,7 +174,7 @@ string.
 }
 ```
 
-Namespaces are reverse-DNS strings, registered in §6.1.7. Registration is a
+Namespaces are reverse-DNS strings, registered in §6.1.6. Registration is a
 change to this document.
 
 - Readers MUST NOT interpret a value in a namespace they do not own.
@@ -190,13 +190,9 @@ type WalletStateV3 = { /* … */ extensions?: Extensions };
 
 #### 6.1.1 Entry keys
 
-For a namespace in `lww` mode (§6.1.2), an entry key MUST identify a single
-entity the wallet already tracks — a key identifier, a credential
-identifier, a batch identifier. An entry key MUST NOT name a subsystem, a
-plugin, or a category.
-
-An `events`-mode namespace defines its own state shape and is not bound by
-this rule.
+An entry key MUST identify a single entity the wallet already tracks — a key
+identifier, a credential identifier, a batch identifier. An entry key MUST
+NOT name a subsystem, a plugin, or a category.
 
 *Non-normative illustration — the rule exists because resolution is
 per key:*
@@ -214,40 +210,7 @@ const notOk: Extensions = {
 };
 ```
 
-#### 6.1.2 Merge modes
-
-A namespace declares its merge mode at registration. Two modes are defined.
-
-**`lww`** (default). State is a map from entry key to opaque value.
-Resolution is last-write-wins per `(namespace, key)`. A client MAY merge and
-fold an `lww` namespace without understanding its values.
-
-**`events`**. The namespace defines its own event types, reduction and merge
-semantics.
-
-- A client that does not support the namespace MUST retain its events, MUST
-  ignore them when folding, and MUST NOT fold them into `S`.
-- Only a client that supports the namespace may fold them.
-- The namespace MUST specify its own event ordering.
-
-A namespace SHOULD use `lww` unless whole-entry replacement would lose
-information.
-
-*Non-normative illustration — a client without support retains and ignores,
-rather than dropping or failing:*
-
-```typescript
-function reduce(state: WalletState, e: WalletSessionEvent): WalletState {
-  if (isExtensionEvent(e) && !supports(e.namespace)) {
-    // Retained in `events` by the caller; contributes nothing to `S`, and
-    // MUST NOT be folded away by this client.
-    return state;
-  }
-  return applyKnown(state, e);
-}
-```
-
-#### 6.1.3 Size
+#### 6.1.2 Size
 
 - A namespace's state size MUST be proportional to entities the user can
   enumerate and delete.
@@ -257,10 +220,9 @@ function reduce(state: WalletState, e: WalletSessionEvent): WalletState {
 
 Implementations SHOULD report per-namespace sizes.
 
-#### 6.1.4 Events, reduction and merge
+#### 6.1.3 Events, reduction and merge
 
-Extension state MUST be written as events. For an `lww` namespace the event
-type is `set_extension`:
+Extension state MUST be written as events, of type `set_extension`:
 
 ```json
 {
@@ -281,7 +243,7 @@ type is `set_extension`:
   `timestampSeconds` and, where equal, by `eventId`. The tiebreak is
   REQUIRED.
 - Tombstones MUST survive event-history folding for at least the maximum
-  permitted time between folds (§6.1.5).
+  permitted time between folds (§6.1.4).
 
 *Non-normative illustration — reduction, total over unknown namespaces:*
 
@@ -309,12 +271,13 @@ const setExtensionStrategy: MergeStrategy = (_mbesv, a, b) =>
   );
 ```
 
-Folding an `lww` namespace is order-independent: for a given key the result
-is the value of the greatest `(timestampSeconds, eventId)` among its events,
-whether a client folds a prefix of the history or all of it. This property
-does not extend to `events` mode.
+Folding is order-independent: for a given key the result is the value of the
+greatest `(timestampSeconds, eventId)` among its events, whether a client
+folds a prefix of the history or all of it. A client MAY therefore fold a
+namespace it does not understand, and the folded state does not depend on
+which client folded it.
 
-#### 6.1.5 Peers beyond the fold horizon
+#### 6.1.4 Peers beyond the fold horizon
 
 A peer that has not synchronised within the fold horizon no longer shares a
 reachable common ancestor, and no correct merge exists for any part of the
@@ -337,11 +300,11 @@ if (base === null) {
 return mergeFrom(base, local, remote);
 ```
 
-#### 6.1.6 Versions and dependencies
+#### 6.1.5 Versions and dependencies
 
 A namespace identifier MAY carry a version suffix (`org.siros.bbs/v2`). A
 versioned namespace is independent of its predecessor: its own registry
-entry, merge mode and state.
+entry and its own state.
 
 - Clients MUST NOT assume support for one version implies support for
   another.
@@ -360,13 +323,13 @@ reducing its events while ignoring the other's would produce wrong state —
 its registration MUST declare that dependency, and a client supporting the
 dependent namespace MUST also support the one it depends on.
 
-#### 6.1.7 Namespace registry
+#### 6.1.6 Namespace registry
 
-| Namespace | Owner | Mode | Entry key | Value | Depends on |
-|---|---|---|---|---|---|
-| `org.siros.wscd` | WSCD plugins (native SDKs) | `lww` | `kid` | Key metadata needed to address a key created on a roaming authenticator: credential handle, public key, plugin identity. Never private key material | — |
-| `org.siros.bbs` | Blind BBS credentials (native SDKs) | `lww` | credential id | Blinding factor, committed messages, bound key binding public keys, and the key handles needed to exercise the key binding private keys | `org.siros.wscd` |
-| `org.siros.oid4vci.refresh` | OID4VCI renewal (native SDKs) | `lww` | `batchId` | `refresh_token` and the DPoP key it is bound to | — |
+| Namespace | Owner | Entry key | Value | Depends on |
+|---|---|---|---|---|
+| `org.siros.wscd` | WSCD plugins (native SDKs) | `kid` | Key metadata needed to address a key created on a roaming authenticator: credential handle, public key, plugin identity. Never private key material | — |
+| `org.siros.bbs` | Blind BBS credentials (native SDKs) | credential id | Blinding factor, committed messages, bound key binding public keys, and the key handles needed to exercise the key binding private keys | `org.siros.wscd` |
+| `org.siros.oid4vci.refresh` | OID4VCI renewal (native SDKs) | `batchId` | `refresh_token` and the DPoP key it is bound to | — |
 
 ### 6.2 Legacy top-level extension fields (deprecated)
 
@@ -376,7 +339,7 @@ keyed by stringified `batchId`. Neither was described by a published version
 of this document.
 
 - Readers MAY accept both for migration.
-- Writers MUST NOT emit them. The namespaces in §6.1.7 replace them.
+- Writers MUST NOT emit them. The namespaces in §6.1.6 replace them.
 
 ## 7. Legacy Compatibility Rules
 
