@@ -1,6 +1,6 @@
 # SIROS Wallet Private Data Blob Specification (Normative)
 
-Version: 2.2  
+Version: 2.3  
 Date: 2026-10-16  
 Status: Normative (reference implementation aligned)
 
@@ -193,7 +193,7 @@ A delivered secret is a secret value chosen and supplied by a counterparty such
 as an issuer, for example by an issuer in an OpenID4VCI credential response (the
 `nym_auth` credential's `secret_seed`, delivered as an entry of
 `credential_metadata`). A secret that the wallet generates or derives itself, for
-example `private_seed`, is out of scope of this section and is covered elsewhere.
+example `private_seed`, is out of scope of this section and is covered in Section 5.4.
 
 Rules:
 
@@ -534,3 +534,4 @@ All three documents are non-normative.
 
 - 2.1 (2026-08-28): Section 6.1 (`S.extensions`: namespaced extension state, `set_extension` events, namespace registry) and Section 6.2 (deprecation of the legacy top-level fields `wscdCredentials` and `credentialRefreshTokens`) added. Additive; `S.schemaVersion` remains `3`.
 - 2.2 (2026-10-16): Section 5A (delivered secrets) added; Section 6 gains the optional `S.credentials[].metadata` member and the rule that unknown credential-entry and `S` members MUST be preserved. Additive; `S.schemaVersion` remains `3`.
+- 2.3 (2026-10-16): Section 5.4 (derived secrets, including the `private_seed` derivation of Section 5.4.1) added. Additive; `S.schemaVersion` remains `3`.
