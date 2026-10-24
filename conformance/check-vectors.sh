@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# Offline self-check of test-vectors/vectors.jsonl: needs only jq and sha256sum,
+# Offline self-check of test-vectors/vectors.jsonl: needs only jq, base64 and sha256sum,
 # no client SDK. Verifies that every vector with expected.plaintextStateSha256 /
 # roundTripStateSha256 hashes consistently (compact JSON, key order as written),
 # that credential `metadata` obeys SPEC.md Section 6 in the expected states, and
 # that derived-secrets.json (Section 5.4.1) is reproduced from the roots with openssl,
-# that the delivered-secret commitment vector and the wire-shape / malformed /
-# refusal vectors (Section 5A) hold: each case's response is evaluated against the
+# that the delivered-secret commitment vector and the wire-shape / refusal
+# vectors (Section 5A) hold: each case's response is evaluated against the
 # Section 5A rules and must give the vector's expected outcome and stored metadata,
 # and that the version 3 to 4 migration vectors change only S.schemaVersion.
 set -euo pipefail
@@ -22,19 +22,18 @@ check_entries() { # check_entries <label> <json-array-of-entries>
     jq -e "length>0 and all(.[]; $ENTRY_SHAPE)" <<<"$2" >/dev/null || { echo "FAIL $1: credential entry violates SPEC Section 6.0"; fail=1; return 1; }
 }
 
-# Section 5A.1 shape of org.siros.secret_seed: object of 1..8 members, namespace a
-# non-empty string of <= 64 bytes, seed exactly 32 lowercase hex characters.
-SEED_SHAPE='(.credential_metadata["org.siros.secret_seed"]) as $m
-  | ($m|type=="object") and (($m|length) as $l | $l>=1 and $l<=8)
-    and all($m|to_entries[]; (.key|type=="string" and length>0 and (utf8bytelength<=64) and .!="namespaces")
-      and (.value|type=="string" and test("^[0-9a-f]{32}$")))'
+# Section 5A.1 shape of auxiliary_data: a non-empty array of entries, each an object
+# with a non-empty string type (the extension defines the rest).
+AUX_SHAPE='(.credential_metadata.auxiliary_data) as $m
+  | ($m|type=="array") and ($m|length>0) and all($m[]; type=="object" and (.type|type=="string" and length>0))'
 
-# Section 5A.4: valid advertisement is {namespaces: [1..8 distinct names]} only.
-ADV_SHAPE='(.issuerCredentialMetadata["org.siros.secret_seed"]) as $m
-  | ($m|type=="object") and ($m|keys==["namespaces"]) and ($m.namespaces|type=="array")
-    and (($m.namespaces|length) as $l | $l>=1 and $l<=8) and ($m.namespaces|length==(unique|length))
-    and all($m.namespaces[]; type=="string" and length>0 and utf8bytelength<=64 and .!="namespaces"
-      and (test("^[0-9a-f]{32}$")|not))'
+# b64u_hex <string>: hex of the base64url (no padding) decoding; fails on any other input.
+b64u_hex() {
+    local s=$1
+    [[ "$s" =~ ^[A-Za-z0-9_-]+$ ]] && (( ${#s} % 4 != 1 )) || return 1
+    s+=$(head -c $(( (4 - ${#s} % 4) % 4 )) /dev/zero | tr '\0' '=')
+    tr '_-' '/+' <<<"$s" | base64 -d 2>/dev/null | xxd -p | tr -d '\n'
+}
 
 # SPEC.md Section 6: the event types a version 4 reader implements (wallet-frontend's
 # nine, WalletStateSchemaVersion1.ts, plus set_extension) and the versions it knows.
@@ -56,34 +55,29 @@ FOLD_DUPFREE='def dupfree: . as $st | reduce ($st.events // [])[] as $e
    elif $e.type=="delete_presentation" then .p-=[$e.presentationId]
    else . end) | .bad|not;'
 
-# evaluate_adv <case-json>: prints valid-advertisement | no-advertisement | malformed.
-evaluate_adv() {
-    local c=$1
-    jq -e '.issuerCredentialMetadata|has("org.siros.secret_seed")' <<<"$c" >/dev/null || { echo no-advertisement; return; }
-    if jq -e "$ADV_SHAPE" <<<"$c" >/dev/null; then echo valid-advertisement; else echo malformed; fi
-}
-
 # evaluate_strip <case-json>: prints "<stripped>|<merged>" (compact JSON); the seed
 # member is removed from the response object before the member-wise merge.
 evaluate_strip() {
-    jq -c '(.responseCredentialMetadata|del(.["org.siros.secret_seed"])) as $s
+    jq -c '(.responseCredentialMetadata|del(.auxiliary_data)) as $s
       | "\($s)|\(.issuerCredentialMetadata + $s)"' -r <<<"$1"
 }
 
 # evaluate_case <case-json>: prints "accept <stored-metadata-json>" or "refuse".
 evaluate_case() {
-    local c=$1 ns seed ssc calc
+    local c=$1 seed ssc calc
     jq -e '.response|(has("credential_metadata")|not) or (.credential_metadata|type=="object")' <<<"$c" >/dev/null || { echo refuse; return; }
-    local has; has=$(jq -r '.response.credential_metadata|has("org.siros.secret_seed")' <<<"$c" 2>/dev/null || echo false)
+    local has; has=$(jq -r '.response.credential_metadata|has("auxiliary_data")' <<<"$c" 2>/dev/null || echo false)
     if [[ "$has" == true ]]; then
-        jq -e '.jweEncrypted == true' <<<"$c" >/dev/null || { echo refuse; return; }
-        jq -e '(.responseType // "credential") != "deferred"' <<<"$c" >/dev/null || { echo refuse; return; }
-        jq -e '.response.notification_id|type=="string" and length>0' <<<"$c" >/dev/null || { echo refuse; return; }
-        jq -e ".response|$SEED_SHAPE" <<<"$c" >/dev/null || { echo refuse; return; }
+        jq -e ".response|$AUX_SHAPE" <<<"$c" >/dev/null || { echo refuse; return; }
+        if jq -e 'any(.response.credential_metadata.auxiliary_data[]; has("opening"))' <<<"$c" >/dev/null; then
+            jq -e '.jweEncrypted == true' <<<"$c" >/dev/null || { echo refuse; return; }
+            jq -e '.response.notification_id|type=="string" and length>0' <<<"$c" >/dev/null || { echo refuse; return; }
+        fi
     fi
-    ns=$(jq -r .commitmentNamespace <<<"$c"); ssc=$(jq -r .sscHex <<<"$c")
-    seed=$(jq -r --arg ns "$ns" '.response.credential_metadata["org.siros.secret_seed"][$ns] // empty' <<<"$c")
+    ssc=$(jq -r .sscHex <<<"$c")
+    seed=$(jq -r '.commitmentPath as $p | first(.response.credential_metadata.auxiliary_data[]? | select(.type=="hash_commitment" and .path==$p) | .opening) // empty' <<<"$c")
     [[ -n "$seed" ]] || { echo refuse; return; }
+    seed=$(b64u_hex "$seed") || { echo refuse; return; }
     calc=$(printf '%s' "$seed" | xxd -r -p | sha256sum | cut -d' ' -f1)
     [[ "$calc" == "$ssc" ]] || { echo refuse; return; }
     echo "accept $(jq -c '[.response.credential_metadata|to_entries[]|{type:.key,value:.value}]' <<<"$c")"
@@ -192,27 +186,13 @@ while IFS= read -r line; do
             # the seed hex must be absent from the stripped and merged display metadata
             while IFS= read -r hex; do
                 if [[ "$gs$gm" == *"$hex"* ]]; then echo "FAIL $id[$k] $nm: seed leaked into display metadata"; ok=0; fi
-            done < <(jq -r '.responseCredentialMetadata["org.siros.secret_seed"]//{}|.[]' <<<"$c")
-            # the stored entry is the seed member verbatim
-            [[ "$(jq -c '[.responseCredentialMetadata["org.siros.secret_seed"]|select(.)|{type:"org.siros.secret_seed",value:.}]' <<<"$c")" == "$(jq -c .expected.storedMetadata <<<"$c")" ]] || { echo "FAIL $id[$k] $nm: stored metadata"; ok=0; }
+            done < <(jq -r '.responseCredentialMetadata.auxiliary_data//[]|.[]|.opening // empty' <<<"$c")
+            # the stored entry is the member verbatim
+            [[ "$(jq -c '[.responseCredentialMetadata.auxiliary_data|select(.)|{type:"auxiliary_data",value:.}]' <<<"$c")" == "$(jq -c .expected.storedMetadata <<<"$c")" ]] || { echo "FAIL $id[$k] $nm: stored metadata"; ok=0; }
         done
         if [[ $ok == 1 ]]; then echo "ok   $id ($ncases cases)"; else fail=1; fi
     fi
-    if [[ "$id" == delivered-secret-advertise-001 ]]; then
-        n=$((n+1)); ok=1
-        ncases=$(jq '.inputs.cases|length' <<<"$line")
-        [[ "$ncases" -gt 0 ]] || { echo "FAIL $id: no cases"; ok=0; }
-        for ((k=0;k<ncases;k++)); do
-            c=$(jq -c ".inputs.cases[$k]" <<<"$line")
-            want=$(jq -r .expected.outcome <<<"$c"); got=$(evaluate_adv "$c")
-            [[ "$got" == "$want" ]] || { echo "FAIL $id[$k] $(jq -r .name <<<"$c"): got $got want $want"; ok=0; }
-            if [[ "$want" == valid-advertisement ]]; then
-                jq -e '.expected.walletMustRequestCredentialResponseEncryption and .expected.walletMustRefusePlainResponse' <<<"$c" >/dev/null || { echo "FAIL $id[$k]: encryption obligations missing"; ok=0; }
-            fi
-        done
-        if [[ $ok == 1 ]]; then echo "ok   $id ($ncases cases)"; else fail=1; fi
-    fi
-    if [[ "$id" == delivered-secret-wire-001 || "$id" == delivered-secret-malformed-001 || "$id" == delivered-secret-refusal-001 ]]; then
+    if [[ "$id" == delivered-secret-wire-001 || "$id" == delivered-secret-refusal-001 ]]; then
         n=$((n+1)); ok=1
         ncases=$(jq '.inputs.cases|length' <<<"$line")
         [[ "$ncases" -gt 0 ]] || { echo "FAIL $id: no cases"; ok=0; }
