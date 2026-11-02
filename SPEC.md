@@ -1,7 +1,7 @@
 # SIROS Wallet Private Data Blob Specification (Normative)
 
-Version: 3.0  
-Date: 2026-10-21  
+Version: 3.1  
+Date: 2026-11-02  
 Status: Normative (reference implementation aligned)
 
 ## 1. Scope and Source of Truth
@@ -736,7 +736,68 @@ dependent namespace MUST also support the one it depends on.
 |---|---|---|---|---|
 | `org.siros.wscd` | WSCD plugins (native SDKs) | `kid` | Key metadata needed to address a key created on a roaming authenticator: credential handle, public key, plugin identity. Never private key material | — |
 | `org.siros.bbs` | Blind BBS credentials (native SDKs) | credential id | Blinding factor, committed messages, bound key binding public keys, and the key handles needed to exercise the key binding private keys | `org.siros.wscd` |
-| `org.siros.oid4vci.refresh` | OID4VCI renewal (native SDKs) | `batchId` | `refresh_token` and the DPoP key it is bound to | — |
+| `org.siros.oid4vci.refresh` | OID4VCI renewal (all clients) | `batchId`, as a decimal string | JSON text: the refresh token of a batch and the DPoP key it is bound to (§6.1.7) | — |
+
+#### 6.1.7 `org.siros.oid4vci.refresh`
+
+The refresh token an OpenID4VCI Token Response returned for a batch of
+credentials, and the DPoP key it is bound to, so that the batch can be renewed
+without the user authorizing again.
+
+Entry key: the `batchId` of the `S.credentials[]` entries issued with the token,
+as a decimal string.
+
+Value: JSON text of an object with the members
+
+- `refreshToken`: string. The `refresh_token` of the Token Response.
+- `dpopJwk`: object, OPTIONAL. The private JWK
+  ([RFC 7517](https://www.rfc-editor.org/rfc/rfc7517)) of the DPoP key
+  ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)) the token is bound to,
+  when that key can be exported.
+- `dpopKid`: string, OPTIONAL. The `kid` of an `org.siros.wscd` entry for the
+  DPoP key the token is bound to, when that key is held by a WSCD and cannot be
+  exported.
+- `credentialIssuerIdentifier`: string. The Credential Issuer of the batch.
+- `credentialConfigurationId`: string. The credential configuration of the batch.
+
+At most one of `dpopJwk` and `dpopKid` is present. Neither is present when the
+token is not DPoP-bound. Readers MUST ignore members they do not know. A value
+that is not such an object, or that has both, is treated as no entry.
+
+Writers:
+- MUST NOT write an entry for a `batchId` that is not in `S.credentials`.
+- MUST write a tombstone for the entry when deleting the batch.
+- After a renewal, MUST write the returned refresh token under the new batch's
+  `batchId`, and a tombstone for the renewed batch. An issuer may rotate the
+  token on use, after which the old one is invalid.
+- If the renewed credentials are not stored, for example because the user
+  declined them, MUST instead write the returned refresh token under the
+  renewed batch's `batchId`
+  ([RFC 6749 §6](https://www.rfc-editor.org/rfc/rfc6749#section-6)).
+
+A tombstone for an entry is a `set_extension` event (§6.1.3) for this namespace
+and the entry's key, with `value` `null`. Reduction then deletes the entry:
+
+```json
+{
+  "type": "set_extension",
+  "schemaVersion": 4,
+  "eventId": 1234,
+  "parentHash": "…",
+  "timestampSeconds": 1762092000,
+  "namespace": "org.siros.oid4vci.refresh",
+  "key": "1849302113",
+  "value": null
+}
+```
+
+Readers:
+- MUST ignore an entry whose `batchId` is not in `S.credentials`.
+- MUST sign the DPoP proofs of the refresh token request with the key in
+  `dpopJwk` or named by `dpopKid`.
+- A reader that cannot use that key (it does not support `org.siros.wscd`, or
+  the WSCD is not available) MUST NOT renew with the entry, and SHOULD renew by
+  a new authorization instead. It MUST NOT delete the entry.
 
 ### 6.2 Legacy top-level extension fields (deprecated)
 
@@ -799,3 +860,4 @@ All three documents are non-normative.
 - 2.6 (2026-10-20): Section 6.0 defines the `S.credentials[]` entry exactly as `wallet-frontend` stores it (`credentialId`, `instanceId` and `batchId` are numbers, `data` is the stored credential; no `id` member). The previous example and vectors used a string `id` and string `instanceId`/`batchId` and no `data`, which no implementation produced. Vectors single-credential-v3-001, multi-passkey-v3-001, the metadata vectors and the fixtures use the corrected form. Wire and container unchanged; `S.schemaVersion` remains `3`.
 - 2.7 (2026-10-20): Section 5.4.1: the private seed depends on the issuer (label `org.siros.private_seed/v2`, `info = label || lp(credentialType) || lp(issuer)`); `v1` withdrawn, it was never released. `derived-secrets.json` regenerated. `S.schemaVersion` remains `3`.
 - 3.0 (2026-10-21): `S.schemaVersion` 4 (breaking: a version 3 reader refuses a version 4 container). `set_extension`, `S.extensions` and `S.credentials[].metadata` move from version 3 to version 4, because version 3 readers crash on them or drop them. A new event type needs a new version, so a reader refuses to rewrite a version or event type it does not know. Version 3 is as `wallet-frontend` defines it. Section 6 lists the event types of each version, says that an absent `S.schemaVersion` means 1, that a reader may refuse versions 1 and 2 it cannot migrate, that `set_extension` stamped 3 is accepted, and that `S.keypairs[]` entries are preserved like credential entries. Section 6.1.3: a client without an event log still appends `set_extension` events. Vectors use real events instead of placeholders. SDKs MAY write version 4 before `wallet-frontend` implements it.
+- 3.1 (2026-11-02): Section 6.1.7 defines the value of `org.siros.oid4vci.refresh`: JSON text with `refreshToken`, the DPoP key as `dpopJwk` (exportable) or `dpopKid` (a key held by a WSCD), `credentialIssuerIdentifier` and `credentialConfigurationId`, and the rules for renewal and deletion. The namespace is owned by all clients. Additive; `S.schemaVersion` remains `4`.
