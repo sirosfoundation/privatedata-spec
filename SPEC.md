@@ -771,6 +771,22 @@ Writers:
   `batchId`, and a tombstone for the renewed batch. An issuer may rotate the
   token on use, after which the old one is invalid.
 
+A tombstone for an entry is a `set_extension` event (§6.1.3) for this namespace
+and the entry's key, with `value` `null`. Reduction then deletes the entry:
+
+```json
+{
+  "type": "set_extension",
+  "schemaVersion": 4,
+  "eventId": 1234,
+  "parentHash": "…",
+  "timestampSeconds": 1762092000,
+  "namespace": "org.siros.oid4vci.refresh",
+  "key": "1849302113",
+  "value": null
+}
+```
+
 Readers:
 - MUST ignore an entry whose `batchId` is not in `S.credentials`.
 - MUST sign the DPoP proofs of the refresh token request with the key in
