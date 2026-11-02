@@ -770,6 +770,10 @@ Writers:
 - After a renewal, MUST write the returned refresh token under the new batch's
   `batchId`, and a tombstone for the renewed batch. An issuer may rotate the
   token on use, after which the old one is invalid.
+- If the renewed credentials are not stored, for example because the user
+  declined them, MUST instead write the returned refresh token under the
+  renewed batch's `batchId`
+  ([RFC 6749 §6](https://www.rfc-editor.org/rfc/rfc6749#section-6)).
 
 A tombstone for an entry is a `set_extension` event (§6.1.3) for this namespace
 and the entry's key, with `value` `null`. Reduction then deletes the entry:
